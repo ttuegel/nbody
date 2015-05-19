@@ -30,7 +30,7 @@ main = do
     S.mapM_ (\_ -> advance planets) (S.enumFromStepN (0::Int) 1 n)
     energy planets >>= printf "%.9f\n"
 
-data Planet = Planet { x, y, z, vx, vy, vz, mass :: Double }
+data Planet = Planet { x, y, z, vx, vy, vz, mass :: !Double }
 
 squared :: Double -> Double -> Double -> Double
 {-# INLINE squared #-}
