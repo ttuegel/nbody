@@ -4,14 +4,13 @@
 -- Contributed by Branimir Maksimovic
 -- Updated by Thomas Tuegel
 
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Main where
 
 import Foreign.Ptr
 import Foreign.Storable
-import Foreign.Marshal.Alloc
-import Control.Monad
 import System.Environment
 import Text.Printf
 
@@ -19,19 +18,22 @@ import Data.Foldable
 import qualified Data.Vector.Storable as V
 import Data.Vector.Storable.Mutable (IOVector)
 import qualified Data.Vector.Storable.Mutable as M
-import qualified Data.Vector.Generic.Mutable as M (mstream, transform)
+import qualified Data.Vector.Generic.Mutable as M (mstream)
 import Data.Vector.Fusion.Stream.Monadic (Stream)
 import qualified Data.Vector.Fusion.Stream.Monadic as S
 
+main :: IO ()
 main = do
     n <- getArgs >>= readIO.head :: IO Int
     planets <- V.unsafeThaw $ V.fromList initialConditions
     energy planets >>= printf "%.9f\n"
-    S.mapM_ (\_ -> advance planets) (S.enumFromStepN 0 1 n)
+    S.mapM_ (\_ -> advance planets) (S.enumFromStepN (0::Int) 1 n)
     energy planets >>= printf "%.9f\n"
 
 data Planet = Planet { x, y, z, vx, vy, vz, mass :: Double }
 
+squared :: Double -> Double -> Double -> Double
+{-# INLINE squared #-}
 squared x y z = x * x + y * y + z * z
 
 energy :: IOVector Planet -> IO Double
@@ -47,6 +49,14 @@ energy planets = do
     totalPE <- S.foldl' (+) 0 (pairwise potential planets)
     return (totalKE + totalPE)
 
+for :: Monad m => (a, a -> Bool, a -> a) -> (a -> m ()) -> m ()
+{-# INLINE for #-}
+for = \(a0, check, next) act ->
+    let for_loop a
+          | check a = act a >> for_loop (next a)
+          | otherwise = return ()
+    in for_loop a0
+
 pairwise :: Storable a => (a -> a -> b) -> IOVector a -> Stream IO b
 pairwise f v =
     let len = M.length v
@@ -55,22 +65,14 @@ pairwise f v =
               (S.enumFromStepN 0 1 len)
     in S.mapM (\(i, j) -> f <$> M.unsafeRead v i <*> M.unsafeRead v j) ixs
 
-pairwiseUpdate :: Storable a => (a -> a -> (a, a)) -> IOVector a -> IO ()
-pairwiseUpdate f v = do
-    let len = M.length v
-        ixs = S.concatMap
-              (\i -> S.map ((,) i) (S.enumFromStepN (i + 1) 1 (len - i - 1)))
-              (S.enumFromStepN 0 1 len)
-        go = \(i, j) -> do
-            a <- M.unsafeRead v i
-            b <- M.unsafeRead v j
-            let (a', b') = f a b
-            M.unsafeWrite v i a'
-            M.unsafeWrite v j b'
-    S.mapM_ go ixs
-
+advance :: IOVector Planet -> IO ()
+{-# INLINE advance #-}
 advance planets = do
-    let updateVelocity = \a b ->
+    let nbodies = M.length planets
+    for (0, (< nbodies), (+ 1)) $ \i -> do
+        for (i + 1, (< nbodies), (+ 1)) $ \j -> do
+            a <- M.unsafeRead planets i
+            b <- M.unsafeRead planets j
             let dx = x a - x b
                 dy = y a - y b
                 dz = z a - z b
@@ -81,21 +83,22 @@ advance planets = do
                        , vy = vy a - dy * dfb
                        , vz = vz a - dz * dfb
                        }
-                dfa = mass a * mag
+            M.unsafeWrite planets i a'
+            let dfa = mass a * mag
                 b' = b { vx = vx b + dx * dfa
                        , vy = vy b + dy * dfa
                        , vz = vz b + dz * dfa
                        }
-            in (a', b')
-    pairwiseUpdate updateVelocity planets
+            M.unsafeWrite planets j b'
 
-    let updatePosition = \p ->
-            p { x = x p + dt * vx p
-              , y = y p + dt * vy p
-              , z = z p + dt * vz p
-              }
-    M.transform (S.map updatePosition) planets
+        a <- M.unsafeRead planets i
+        let a' = a { x = x a + dt * vx a
+                   , y = y a + dt * vy a
+                   , z = z a + dt * vz a
+                   }
+        M.unsafeWrite planets i a'
 
+initialConditions :: [Planet]
 initialConditions = [sun, jupiter, saturn, uranus, neptune]
   where
     planets = tail initialConditions
@@ -159,14 +162,15 @@ initialConditions = [sun, jupiter, saturn, uranus, neptune]
         , mass = 5.15138902046611451e-05 * solar_mass
         }
 
+days_per_year, dp, solar_mass, dt :: Double
 days_per_year = 365.24
 dp = days_per_year
-solar_mass = 4 * pi ^ 2
+solar_mass = 4 * pi * pi
 dt = 0.01
 
 instance Storable Planet where
-    sizeOf _ = 8 * dblSz
-    alignment _ = dblSz
+    sizeOf _ = 8 * sizeOf (undefined::Double)
+    alignment _ = sizeOf (undefined::Double)
     peekElemOff p i = peek (plusPtr p (i * sizeOf (undefined::Planet)))
     pokeElemOff p i e = poke (plusPtr p (i * sizeOf e)) e
     peek p = do
@@ -190,5 +194,3 @@ instance Storable Planet where
         poke (offset 6) $ mass e
             where
                 offset i = plusPtr (castPtr p::Ptr Double) (i*8)
-
-dblSz = sizeOf (undefined::Double)
