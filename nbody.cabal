@@ -25,4 +25,4 @@ executable nbody
   ghc-options: -Wall
   c-sources: nbody.c
   include-dirs: include
-  cc-options: -Wall -O3
+  cc-options: -pipe -Wall -O3 -fomit-frame-pointer -march=native -mfpmath=sse -msse3
