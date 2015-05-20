@@ -77,17 +77,18 @@ run (fromIntegral -> steps) planets =
         const int nplanets = $vec-len:planets;
         body *planets = $vec-ptr:(body *planets);
         const double dt = 0.01;
-        int i, j, k, m, n;
+        int i, j, k, m;
 
         const int N = ((nplanets - 1) * nplanets) / 2;
         struct { double dx[3], fill; } r[N];
         double mag[N];
 
+        int n;
         for (n = 0; n < $(int steps); n ++) {
 
         /* update velocities */
 
-        /* calculate displacement between each pair of planets */
+        /* compute displacement between each pair */
         for (i = 0, k = 0; i < nplanets - 1; ++i) {
             for (j = i + 1; j < nplanets; ++j, ++k) {
                 for (m = 0; m < 3; ++m)
@@ -95,6 +96,7 @@ run (fromIntegral -> steps) planets =
             }
         }
 
+        /* compute magnitude of force between each pair */
         for (k = 0; k < N; ++k) {
             double rr = 0;
             for (m = 0; m < 3; ++m)
@@ -102,23 +104,22 @@ run (fromIntegral -> steps) planets =
             mag[k] = dt / (rr * sqrt(rr));
         }
 
-        for (i = 0, k = 0; i < nplanets - 1; ++i) {
-            for (j = i + 1; j < nplanets; ++j, ++k) {
-                const double magi = planets[j].mass * mag[k];
+        /* apply forces to planets[i] */
+        for (i = 0, k = 0; i < nplanets - 1; ++i)
+            for (j = i + 1; j < nplanets; ++j, ++k)
                 for (m = 0; m < 3; ++m)
-                    planets[i].v[m] -= r[k].dx[m] * magi;
+                    planets[i].v[m] -= r[k].dx[m] * planets[j].mass * mag[k];
 
-                const double magj = planets[i].mass * mag[k];
+        /* apply forces to planets[j] */
+        for (i = 0, k = 0; i < nplanets - 1; ++i)
+            for (j = i + 1; j < nplanets; ++j, ++k)
                 for (m = 0; m < 3; ++m)
-                    planets[j].v[m] += r[k].dx[m] * magj;
-            }
-        }
+                    planets[j].v[m] += r[k].dx[m] * planets[i].mass * mag[k];
 
         /* update positions */
-        for (i = 0; i < nplanets; ++i) {
+        for (i = 0; i < nplanets; ++i)
             for (m = 0; m < 3; ++m)
                 planets[i].x[m] += dt * planets[i].v[m];
-        }
 
         }
     }
