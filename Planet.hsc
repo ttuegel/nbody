@@ -1,6 +1,15 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Planet where
+
+import Data.Map (Map)
+import qualified Data.Map as M
+import qualified Language.C.Inline as C
+import qualified Language.C.Inline.Context as C
+import qualified Language.C.Types as C
+import qualified Language.Haskell.TH as TH
 
 import Foreign.ForeignPtr (newForeignPtr_)
 import Foreign.Ptr
@@ -38,3 +47,9 @@ instance Storable Planet where
         V.copy (M.slice 0 3 body) pos
         V.copy (M.slice 4 3 body) vel
         M.unsafeWrite body 7 mass
+
+nbodiesTypesTable :: Map C.TypeSpecifier TH.TypeQ
+nbodiesTypesTable = M.fromList [ (C.TypeName "body", [t| Planet |]) ]
+
+nbodiesCtx :: C.Context
+nbodiesCtx = mempty { C.ctxTypesTable = nbodiesTypesTable }

@@ -8,83 +8,114 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ViewPatterns #-}
 
-module Main where
+module Main (main) where
 
+import Data.Monoid ((<>))
 import System.Environment
 import Text.Printf
 
+import qualified Language.C.Inline as C
+
 import Data.Foldable
-import Data.Vector.Storable (Storable, Vector)
 import qualified Data.Vector.Storable as V
 import Data.Vector.Storable.Mutable (IOVector)
-import qualified Data.Vector.Storable.Mutable as M
-import qualified Data.Vector.Generic.Mutable as M (mstream)
-import Data.Vector.Fusion.Stream.Monadic (Stream)
-import qualified Data.Vector.Fusion.Stream.Monadic as S
 
 import Planet
+
+C.context (C.baseCtx <> C.vecCtx <> nbodiesCtx)
+
+C.include "<math.h>"
+C.include "nbody.h"
 
 main :: IO ()
 main = do
     n <- getArgs >>= readIO.head :: IO Int
     planets <- V.unsafeThaw $ V.fromList initialConditions
     energy planets >>= printf "%.9f\n"
-    S.mapM_ (\_ -> advance planets) (S.enumFromStepN (0::Int) 1 n)
+    run n planets
     energy planets >>= printf "%.9f\n"
 
-squared :: Vector Double -> Double
-{-# INLINE squared #-}
-squared = V.sum . V.map (\x -> x * x)
-
 energy :: IOVector Planet -> IO Double
-energy planets = do
-    let kinetic Planet {..} = 0.5 * mass * squared vel
-        potential a b =
-            let dx = V.zipWith (-) (pos a) (pos b)
-                r = sqrt $ squared dx
-            in negate $ mass a * mass b / r
-    totalKE <- S.foldl' (+) 0 (S.map kinetic (M.mstream planets))
-    totalPE <- S.foldl' (+) 0 (pairwise potential planets)
-    return (totalKE + totalPE)
+energy planets = fmap realToFrac
+    [C.block| double
+    {
+        double energy = 0;
+        body *planets = $vec-ptr:(body *planets);
+        int i, j;
 
-for :: Monad m => (a, a -> Bool, a -> a) -> (a -> m ()) -> m ()
-{-# INLINE for #-}
-for = \(a0, check, next) act ->
-    let for_loop a
-          | check a = act a >> for_loop (next a)
-          | otherwise = return ()
-    in for_loop a0
+        /* Kinetic energy */
+        for (i = 0; i < $vec-len:planets; i++) {
+            double vv = 0;
+            int k;
+            for (k = 0; k < 3; k++)
+                vv += planets[i].v[k] * planets[i].v[k];
 
-pairwise :: Storable a => (a -> a -> b) -> IOVector a -> Stream IO b
-pairwise f v =
-    let len = M.length v
-        ixs = S.concatMap
-              (\i -> S.map ((,) i) (S.enumFromStepN (i + 1) 1 (len - i - 1)))
-              (S.enumFromStepN 0 1 len)
-    in S.mapM (\(i, j) -> f <$> M.unsafeRead v i <*> M.unsafeRead v j) ixs
+            energy += 0.5 * planets[i].mass * vv;
+        }
 
-advance :: IOVector Planet -> IO ()
-{-# INLINE advance #-}
-advance planets = do
-    let nbodies = M.length planets
-    for (0, (< nbodies), (+ 1)) $ \i -> do
-        for (i + 1, (< nbodies), (+ 1)) $ \j -> do
-            a <- M.unsafeRead planets i
-            b <- M.unsafeRead planets j
-            let dx = V.zipWith (-) (pos a) (pos b)
-                rSq = squared dx
-                mag = dt / (rSq * sqrt rSq)
-                dfb = negate (mass b * mag)
-                a' = a { vel = V.zipWith (+) (vel a) (V.map (* dfb) dx) }
-            M.unsafeWrite planets i a'
-            let dfa = mass a * mag
-                b' = b { vel = V.zipWith (+) (vel b) (V.map (* dfa) dx) }
-            M.unsafeWrite planets j b'
+        /* Potential energy */
+        for (i = 0; i < $vec-len:planets; i++) {
+            for (j = i + 1; j < $vec-len:planets; j++) {
+                double rr = 0;
+                int k;
+                for (k = 0; k < 3; k++) {
+                    double dx = planets[i].x[k] - planets[j].x[k];
+                    rr += dx * dx;
+                }
+                energy -= planets[i].mass * planets[j].mass / sqrt(rr);
+            }
+        }
 
-        a <- M.unsafeRead planets i
-        let a' = a { pos = V.zipWith (+) (pos a) (V.map (* dt) (vel a)) }
-        M.unsafeWrite planets i a'
+        return energy;
+    }
+    |]
+
+run :: Int -> IOVector Planet -> IO ()
+run (fromIntegral -> steps) planets =
+    [C.block| void
+    {
+        body *planets = $vec-ptr:(body *planets);
+        const double dt = 0.01;
+        int i, j, n;
+
+        for (n = 0; n < $(int steps); n ++) {
+
+        /* Update velocities */
+        for (i = 0; i < $vec-len:planets; i++) {
+            for (j = i + 1; j < $vec-len:planets; j++) {
+                double dx[3];
+                int k;
+                for (k = 0; k < 3; k++)
+                    dx[k] = planets[i].x[k] - planets[j].x[k];
+
+                double rr = 0;
+                for (k = 0; k < 3; k++)
+                    rr += dx[k] * dx[k];
+
+                const double mag = dt / (rr * sqrt(rr));
+
+                double mag_ = planets[j].mass * mag;
+                for (k = 0; k < 3; k++)
+                    planets[i].v[k] -= mag_ * dx[k];
+
+                mag_ = planets[i].mass * mag;
+                for (k = 0; k < 3; k++)
+                    planets[j].v[k] += mag_ * dx[k];
+            }
+        }
+
+        /* Update positions */
+        for (i = 0; i < $vec-len:planets; i++) {
+            int k;
+            for (k = 0; k < 3; k++)
+                planets[i].x[k] += dt * planets[i].v[k];
+        }
+
+        }
+    }
+    |]
 
 initialConditions :: [Planet]
 initialConditions = [sol, jupiter, saturn, uranus, neptune]
@@ -163,8 +194,7 @@ initialConditions = [sol, jupiter, saturn, uranus, neptune]
         , mass = 5.15138902046611451e-05 * solar_mass
         }
 
-days_per_year, dp, solar_mass, dt :: Double
+days_per_year, dp, solar_mass :: Double
 days_per_year = 365.24
 dp = days_per_year
 solar_mass = 4 * pi * pi
-dt = 0.01
