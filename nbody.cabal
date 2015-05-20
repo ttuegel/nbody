@@ -1,12 +1,11 @@
 name:                nbody
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            nbody examples from benchmarksgame.alioth.debian.org
 license:             BSD3
 license-file:        LICENSE
 author:              Thomas Tuegel
 maintainer:          ttuegel@gmail.com
--- copyright:           
+copyright:           2015 Thomas Tuegel
 category:            Math
 build-type:          Simple
 extra-source-files:  ChangeLog.md
@@ -14,8 +13,12 @@ cabal-version:       >=1.10
 
 executable nbody
   main-is: nbody.hs
+  other-modules:
+    Planet
   build-depends:
       base >= 4.7 && < 5
+    , inline-c >= 0.5
     , vector >= 0.10
   default-language: Haskell2010
   ghc-options: -Wall
+  include-dirs: include
