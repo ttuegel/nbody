@@ -43,12 +43,11 @@ energy planets = fmap realToFrac
     {
         double energy = 0;
         body *planets = $vec-ptr:(body *planets);
-        int i, j;
+        int i, j, k;
 
         /* Kinetic energy */
         for (i = 0; i < $vec-len:planets; i++) {
             double vv = 0;
-            int k;
             for (k = 0; k < 3; k++)
                 vv += planets[i].v[k] * planets[i].v[k];
 
@@ -59,7 +58,6 @@ energy planets = fmap realToFrac
         for (i = 0; i < $vec-len:planets; i++) {
             for (j = i + 1; j < $vec-len:planets; j++) {
                 double rr = 0;
-                int k;
                 for (k = 0; k < 3; k++) {
                     double dx = planets[i].x[k] - planets[j].x[k];
                     rr += dx * dx;
@@ -76,41 +74,50 @@ run :: Int -> IOVector Planet -> IO ()
 run (fromIntegral -> steps) planets =
     [C.block| void
     {
+        const int nplanets = $vec-len:planets;
         body *planets = $vec-ptr:(body *planets);
         const double dt = 0.01;
-        int i, j, n;
+        int i, j, k, m, n;
+
+        const int N = ((nplanets - 1) * nplanets) / 2;
+        struct { double dx[3], fill; } r[N];
+        double mag[N];
 
         for (n = 0; n < $(int steps); n ++) {
 
-        /* Update velocities */
-        for (i = 0; i < $vec-len:planets; i++) {
-            for (j = i + 1; j < $vec-len:planets; j++) {
-                double dx[3];
-                int k;
-                for (k = 0; k < 3; k++)
-                    dx[k] = planets[i].x[k] - planets[j].x[k];
+        /* update velocities */
 
-                double rr = 0;
-                for (k = 0; k < 3; k++)
-                    rr += dx[k] * dx[k];
-
-                const double mag = dt / (rr * sqrt(rr));
-
-                double mag_ = planets[j].mass * mag;
-                for (k = 0; k < 3; k++)
-                    planets[i].v[k] -= mag_ * dx[k];
-
-                mag_ = planets[i].mass * mag;
-                for (k = 0; k < 3; k++)
-                    planets[j].v[k] += mag_ * dx[k];
+        /* calculate displacement between each pair of planets */
+        for (i = 0, k = 0; i < nplanets - 1; ++i) {
+            for (j = i + 1; j < nplanets; ++j, ++k) {
+                for (m = 0; m < 3; ++m)
+                    r[k].dx[m] = planets[i].x[m] - planets[j].x[m];
             }
         }
 
-        /* Update positions */
-        for (i = 0; i < $vec-len:planets; i++) {
-            int k;
-            for (k = 0; k < 3; k++)
-                planets[i].x[k] += dt * planets[i].v[k];
+        for (k = 0; k < N; ++k) {
+            double rr = 0;
+            for (m = 0; m < 3; ++m)
+                rr += r[k].dx[m] * r[k].dx[m];
+            mag[k] = dt / (rr * sqrt(rr));
+        }
+
+        for (i = 0, k = 0; i < nplanets - 1; ++i) {
+            for (j = i + 1; j < nplanets; ++j, ++k) {
+                const double magi = planets[j].mass * mag[k];
+                for (m = 0; m < 3; ++m)
+                    planets[i].v[m] -= r[k].dx[m] * magi;
+
+                const double magj = planets[i].mass * mag[k];
+                for (m = 0; m < 3; ++m)
+                    planets[j].v[m] += r[k].dx[m] * magj;
+            }
+        }
+
+        /* update positions */
+        for (i = 0; i < nplanets; ++i) {
+            for (m = 0; m < 3; ++m)
+                planets[i].x[m] += dt * planets[i].v[m];
         }
 
         }
